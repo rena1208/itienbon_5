@@ -22,6 +22,8 @@
 	// let mapInstance: Map = new Map(INIT_MAP_SETTING);
 	let mapInstance: Map | null = null;
 
+	let userLocation = $state(null);
+
 	// mapの初期描画
 	onMount(async () => {
 		const map = new maplibregl.Map({
@@ -403,7 +405,16 @@
 				}
 			});
 			map.addControl(skhbOpacity, 'top-right');
+
+			// 現在位置の表示
+			const geolocationControl = new maplibregl.GeolocateControl({
+				trackUserLocation: true,
+			});
+			map.addControl(geolocationControl, 'bottom-right');
 		});
+
+
+
 		// クリックしてアラートを表示
 		mapInstance.on('click', (e) => {
 			const features = map.queryRenderedFeatures(e.point, {
