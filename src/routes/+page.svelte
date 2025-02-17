@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Amplifyの設定を確かめるためのコメント
 	import maplibregl, { type Map } from 'maplibre-gl';
 	// import { type Point, type Position } from 'geojson';
 	// import maplibregl from 'maplibre-gl';
