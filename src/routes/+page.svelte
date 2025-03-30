@@ -1,12 +1,14 @@
 <script lang="ts">
 	import maplibregl, { type Map } from 'maplibre-gl';
-	// import { type Point, type Position } from 'geojson';
+	import type { LayerSpecification, FilterSpecification, MapGeoJSONFeature } from 'maplibre-gl';
+	import { type Point, type Feature, type LineString } from 'geojson';
 	// import maplibregl from 'maplibre-gl';
+	import distance from '@turf/distance';
 	import OpacityControl from 'maplibre-gl-opacity';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import 'maplibre-gl-opacity/dist/maplibre-gl-opacity.css';
 	import { onMount } from 'svelte';
-
+	
 	// mapの初期設定
 	const INIT_MAP_SETTING = {
 		zoom: 5,
@@ -22,7 +24,7 @@
 	// let mapInstance: Map = new Map(INIT_MAP_SETTING);
 	let mapInstance: Map | null = null;
 
-	let userLocation = $state(null);
+	let userLocation = $state<null | [number, number]>(null);
 
 	// mapの初期描画
 	onMount(async () => {
@@ -120,6 +122,14 @@
 						maxzoom: 8,
 						attribution:
 							'<a href="https://www.gsi.go.jp/bousaichiri/hinanbasho.html" target="_blank">国土地理院:指定緊急避難場所データ</a>'
+					},
+					route: {
+						// 現在位置と最寄りの避難施設をつなぐライン
+						type: 'geojson',
+						data: {
+							type: 'FeatureCollection',
+							features: []
+						}
 					}
 				},
 				layers: [
@@ -369,14 +379,84 @@
 						},
 						filter: ['get', '火山現象'],
 						layout: { visibility: 'none' }
+					},
+					{
+						// 現在位置と最寄り施設のライン
+						id: 'route-layer',
+						source: 'route',
+						type: 'line',
+						paint: {
+							'line-color': '#33aaff',
+							'line-width': 4
+						}
 					}
 				]
 			},
 			...INIT_MAP_SETTING
 		});
 
-		// Mapを更新
-		mapInstance = map;
+		const isFilterableLayer = (
+			layer: LayerSpecification
+		): layer is LayerSpecification & { filter: FilterSpecification } => {
+			return 'filter' in layer;
+		};
+		// 現在選択されている避難場所レイヤーのfilter条件を返す
+		const getSelectedSkhbLayerFilter = () => {
+			const style = map.getStyle();
+			const skhbLayers = style.layers.filter((layer) => layer.id.startsWith('skhb'));
+
+			const visibleSkhbLayers = skhbLayers.filter(
+				(layer) => layer.layout?.visibility === 'visible'
+			);
+
+			// const filterableLayer = visibleSkhbLayers.find(isFilterableLayer);
+			const filterableLayer: (LayerSpecification & { filter: FilterSpecification })[] =
+				visibleSkhbLayers.filter(isFilterableLayer);
+
+			return filterableLayer[0]?.filter;
+		};
+
+		// 経緯度を渡すと最寄りの避難場所を返す関数
+		const getNearestFeature = (longitude: number, latitude: number) => {
+			const currentSkhbLayerFilter = getSelectedSkhbLayerFilter();
+			const features = map.querySourceFeatures('skhb', {
+				sourceLayer: 'skhb',
+				filter: currentSkhbLayerFilter as any[]
+			});
+
+			// 現在地に最も近い地物を見つける
+			const nearestFeature = features.reduce<MapGeoJSONFeature | null>(
+				(minDistFeature, feature) => {
+					// Point以外は処理をしない
+					if (feature.geometry.type !== 'Point') return minDistFeature;
+
+					const dist = distance([longitude, latitude], feature.geometry.coordinates);
+					if (minDistFeature === null || minDistFeature.properties.dist > dist) {
+						const updatedFeature = {
+							...feature,
+							properties: {
+								...feature.properties,
+								dist
+							}
+						} as unknown as MapGeoJSONFeature;
+
+						return updatedFeature;
+					}
+					return minDistFeature;
+				},
+				null
+			);
+			return nearestFeature;
+		};
+
+		// ユーザーの位置情報を取得
+		const geolocationControl = new maplibregl.GeolocateControl({
+			trackUserLocation: true
+		});
+		map.addControl(geolocationControl, 'bottom-right');
+		geolocationControl.on('geolocate', (e) => {
+			userLocation = [e.coords.longitude, e.coords.latitude];
+		});
 
 		map.on('load', () => {
 			// mapの初期ロード完了時に発火するイベントの定義
@@ -406,14 +486,43 @@
 			});
 			map.addControl(skhbOpacity, 'top-right');
 
-			// 現在位置の表示
-			const geolocationControl = new maplibregl.GeolocateControl({
-				trackUserLocation: true,
+			// 地図画面が描画される毎フレームごとに、ユーザー現在地と最寄りの避難施設の線分を描画する
+			map.on('render', () => {
+				// GeolocationControlがオフなら現在位置を消去
+				if (geolocationControl._watchState === 'OFF') userLocation = null;
+
+				// ズームが7以下または現在地がない場合はラインを消去する
+				if (map.getZoom() < 7 || userLocation === null) {
+					(map.getSource('route') as maplibregl.GeoJSONSource | undefined)?.setData({
+						type: 'FeatureCollection',
+						features: []
+					});
+					return;
+				}
+				// 現在地の最寄りの地物を取得
+				const nearestFeature = getNearestFeature(userLocation[0], userLocation[1]);
+
+				const routeFeature: Feature<LineString> = {
+					type: 'Feature',
+					geometry: {
+						type: 'LineString',
+						coordinates: [userLocation, (nearestFeature?._geometry as Point).coordinates] as [
+							[number, number],
+							[number, number]
+						]
+					},
+					properties: {}
+				};
+				// style.sources.routeのGeoJSONデータを更新する
+				(map.getSource('route') as maplibregl.GeoJSONSource | undefined)?.setData({
+					type: 'FeatureCollection',
+					features: [routeFeature]
+				});
 			});
-			map.addControl(geolocationControl, 'bottom-right');
 		});
 
-
+		// Mapを更新
+		mapInstance = map;
 
 		// クリックしてアラートを表示
 		mapInstance.on('click', (e) => {
@@ -438,13 +547,6 @@
 			console.log(features);
 			console.log(feature);
 			if (feature.geometry.type === 'Point') {
-				// const popup = new maplibregl.Popup().setLngLat(feature.geometry.coordinates)
-
-				// const coordinates = feature.geometry.coordinates as [number, number];
-				// const popup = new maplibregl.Popup()
-				// 	.setLngLat(coordinates)
-				// 	.setHTML(
-
 				const popup = new maplibregl.Popup()
 					.setLngLat(feature.geometry.coordinates as [number, number]) // [lon, lat]
 					// 名称・住所・備考・対応している災害種別を表示するよう、HTMLを文字列でセット
