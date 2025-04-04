@@ -3,12 +3,17 @@
 	import type { LayerSpecification, FilterSpecification, MapGeoJSONFeature } from 'maplibre-gl';
 	import { type Point, type Feature, type LineString } from 'geojson';
 	// import maplibregl from 'maplibre-gl';
+
 	import distance from '@turf/distance';
 	import OpacityControl from 'maplibre-gl-opacity';
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import 'maplibre-gl-opacity/dist/maplibre-gl-opacity.css';
 	import { onMount } from 'svelte';
-	
+	import { useGsiTerrainSource } from 'maplibre-gl-gsi-terrain';
+
+	// 地形データ生成（地理院標高タイル）
+	const gsiTerrainSource = useGsiTerrainSource(maplibregl.addProtocol);
+
 	// mapの初期設定
 	const INIT_MAP_SETTING = {
 		zoom: 5,
@@ -41,6 +46,7 @@
 						attribution:
 							'&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 					},
+
 					// ハザードマップ
 					// 洪水浸水想定区域
 					hazard_flood: {
@@ -519,6 +525,28 @@
 					features: [routeFeature]
 				});
 			});
+			// 地形データ追加（type=raster-dem）
+			map.addSource('terrain', gsiTerrainSource);
+			// 陰影図追加
+			map.addLayer(
+				{
+					id: 'hillshade',
+					source: 'terrain', // type=raster-demのsourceを指定
+					type: 'hillshade', // 陰影図レイヤー
+					paint: {
+						'hillshade-illumination-anchor': 'map', // 陰影の方向の基準
+						'hillshade-exaggeration': 0.2 // 陰影の強さ
+					}
+				},
+				'hazard_jisuberi-layer' // どのレイヤーの手前に追加するかIDで指定
+			);
+			// 3D地形
+			map.addControl(
+				new maplibregl.TerrainControl({
+					source: 'terrain', // type="raster-dem"のsourceのID
+					exaggeration: 1 // 標高を強調する倍率
+				})
+			);
 		});
 
 		// Mapを更新
